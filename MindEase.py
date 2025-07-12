@@ -8,6 +8,8 @@ from tkinter import scrolledtext, messagebox
 import openai
 from cryptography.fernet import Fernet, InvalidToken
 from pinecone import Pinecone, ServerlessSpec
+import threading
+import queue
 
 # ------------------------
 # API KEY MANAGEMENT
@@ -71,7 +73,7 @@ if not pinecone_key:
         messagebox.showerror("Error", "Missing Pinecone API key. Application will exit.")
         exit(1)
 
-# Initialize Pinecone (AWS us-east-1, 2048-dim)
+# Initialize Pinecone (AWS us-east-1, 1536-dim)
 pc = Pinecone(api_key=pinecone_key)
 index_name = "mindease-1536"
 if index_name not in pc.list_indexes().names():
@@ -104,23 +106,19 @@ def retrieve_similar_messages(session_id, query_text):
 # PROMPTS
 # ------------------------
 
-SYSTEM_PROMPT_GENERAL = (
-    "You are a deeply empathetic and emotionally intelligent mental health companion named 'MindEase'. "
+SYSTEM_PROMPT_GENERAL = ("You are a deeply empathetic and emotionally intelligent mental health companion named 'MindEase'. "
     "You offer emotional support, active listening, and encouragement to users who may be feeling down, anxious, or isolated. "
     "Speak with warmth, calm, and kindness. Uplift the user with gentle language, compassionate understanding, and sincere affirmation. "
     "Never use distancing or clinical phrases like 'I can't help' or 'I'm not qualified'. "
     "Instead, emphasize the user's worth, remind them they're not alone, and if appropriate, gently suggest connecting with someone they trust or a caring professional — not because you can't help, but because they deserve the best care. "
-    "Your purpose is to make them feel heard, safe, and valued."
-)
+    "Your purpose is to make them feel heard, safe, and valued.")
 
-SYSTEM_PROMPT_CRISIS = (
-    "You are 'MindEase', a compassionate and non-judgmental mental health companion. "
+SYSTEM_PROMPT_CRISIS = ("You are 'MindEase', a compassionate and non-judgmental mental health companion. "
     "The user may be experiencing a crisis or emotional distress. Your goal is to respond with deep empathy, calm, and emotional presence. "
     "Avoid robotic or detached statements like 'I’m not qualified' or 'I can’t help'. "
     "Instead, speak as a kind and supportive friend who validates their pain, reminds them of their importance, and encourages them to seek support not out of your limits — but because they are worthy of connection and healing. "
     "You must never make them feel like a burden. Affirm their strength, let them know they are not alone, and gently mention that people like counselors or helplines can walk with them through this. "
-    "Every message should make the user feel safe, cared for, and emotionally held."
-)
+    "Every message should make the user feel safe, cared for, and emotionally held.")
 
 WELCOME_MESSAGES = [
     "You are not alone, even when it feels like you are.",
@@ -187,6 +185,7 @@ def get_supportive_response(user_input, chat_history, session_id):
     messages = [{"role": "system", "content": system_prompt}] + chat_history + [{"role": "user", "content": user_input}]
 
     max_attempts = 3
+    reply = None
     for _ in range(max_attempts):
         response = client.chat.completions.create(
             model="gpt-4",
@@ -203,23 +202,17 @@ def get_supportive_response(user_input, chat_history, session_id):
     store_message_vector(session_id, user_input)
 
     if is_in_crisis:
-        messages.append({"role": "user", "content": "Add a short, gentle sentence reminding the user they are not alone and suggest visiting https://findahelpline.com."})
-        follow_up = client.chat.completions.create(
-            model="gpt-4",
-            messages=messages,
-            temperature=0.7
-        ).choices[0].message.content.strip()
-        return f"{reply}\n\n{follow_up}\n{CRISIS_RESOURCES}"
+        return reply  # Don't add follow-up in queue context, just show one output.
     else:
         affirmation = random.choice(WELCOME_MESSAGES)
-        return f"✨ Here's a gentle thought for you:\n{reply}\n\n{affirmation}"
+        return f"\u2728 Here's a gentle thought for you:\n{reply}\n\n{affirmation}"
 
 CRISIS_RESOURCES = (
-    "\n\n📞 **You are not alone. Help is available:**\n"
-    "🇺🇸 **US**: Call or text 988\n"
-    "🇨🇦 **Canada**: 1-833-456-4566\n"
-    "🇬🇧 **UK**: 116 123\n"
-    "🌍 **More**: https://findahelpline.com"
+    "\n\n\ud83d\udcde **You are not alone. Help is available:**\n"
+    "\ud83c\uddfa\ud83c\uddf8 **US**: Call or text 988\n"
+    "\ud83c\udde8\ud83c\udde6 **Canada**: 1-833-456-4566\n"
+    "\ud83c\uddec\ud83c\udde7 **UK**: 116 123\n"
+    "\ud83c\udf0d **More**: https://findahelpline.com"
 )
 
 class MindEaseChatbot:
@@ -228,81 +221,110 @@ class MindEaseChatbot:
         self.root.title("MindEase – Mental Health Chatbot")
         self.session_id = str(random.randint(1000, 9999))
 
-        # Allow the window to be resizable
         self.root.resizable(True, True)
-        # Set a minimum window size
         self.root.minsize(400, 300)
 
-        # Create a frame for the chat display
         self.chat_frame = tk.Frame(self.root)
         self.chat_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
-        # Configure the ScrolledText with tags for styling
         self.chat_display = scrolledtext.ScrolledText(self.chat_frame, wrap=tk.WORD, state='disabled', width=70, height=20)
         self.chat_display.pack(padx=0, pady=0, fill=tk.BOTH, expand=True)
 
-        # Define tags for MindEase and You with bold and colors
-        self.chat_display.tag_configure("mindease", foreground="#6B3FA0", font=("TkDefaultFont", 9, "bold"))  # Warm purple
-        self.chat_display.tag_configure("user", foreground="#1E90FF", font=("TkDefaultFont", 9, "bold"))  # Soft blue
+        self.chat_display.tag_configure("mindease", foreground="#6B3FA0", font=("TkDefaultFont", 9, "bold"))
+        self.chat_display.tag_configure("user", foreground="#1E90FF", font=("TkDefaultFont", 9, "bold"))
+        self.chat_display.tag_configure("typing", foreground="#666666", font=("TkDefaultFont", 9, "italic"))
 
-        # Create a frame for the input area
         self.input_frame = tk.Frame(self.root)
         self.input_frame.pack(padx=10, pady=(0, 10), fill=tk.X)
 
-        # Configure the Entry to expand horizontally
         self.user_input = tk.Entry(self.input_frame, width=60)
         self.user_input.pack(padx=(0, 5), pady=0, side=tk.LEFT, fill=tk.X, expand=True)
         self.user_input.bind("<Return>", self.send_message)
 
-        # Keep the Send button fixed size
         self.send_button = tk.Button(self.input_frame, text="Send", command=self.send_message)
         self.send_button.pack(pady=0, side=tk.LEFT)
+
+        self.response_queue = queue.Queue()
 
         self.chat_history = []
         welcome_affirmation = random.choice(WELCOME_MESSAGES)
         full_welcome = (
-            "🌼 Hi there. I'm MindEase, your supportive companion. "
+            "\ud83c\udf3c Hi there. I'm MindEase, your supportive companion. "
             "I’m here to listen and help you feel safe and encouraged. How are you feeling today?\n\n"
-            f"💬 *{welcome_affirmation}*"
+            f"\ud83d\udcac *{welcome_affirmation}*"
         )
-        self.display_message("MindEase", full_welcome)
+        self.display_message("MindEase", full_welcome, "mindease")
 
-    def display_message(self, sender, message):
+        self.chat_display.mark_set("typing_mark", tk.END)
+        self.check_queue()
+
+    def display_message(self, sender, message, tag=None):
         self.chat_display.config(state='normal')
-        # Apply the appropriate tag based on the sender
-        tag = "mindease" if sender == "MindEase" else "user"
-        self.chat_display.insert(tk.END, f"{sender}: ", tag)  # Insert sender with tag
-        self.chat_display.insert(tk.END, f"{message}\n\n")    # Insert message without tag
+        if tag:
+            self.chat_display.insert(tk.END, f"{sender}: ", tag)
+            self.chat_display.insert(tk.END, f"{message}\n\n")
+        else:
+            self.chat_display.insert(tk.END, f"{sender}: {message}\n\n")
         self.chat_display.yview(tk.END)
         self.chat_display.config(state='disabled')
+
+
+    def display_typing_message(self):
+        self.chat_display.config(state='normal')
+        self.chat_display.insert(tk.END, "MindEase: is typing...\n", "typing")
+        self.typing_line_index = self.chat_display.index("end-2l linestart")
+        self.chat_display.yview(tk.END)
+        self.chat_display.config(state='disabled')
+
+    def remove_typing_message(self):
+        self.chat_display.config(state='normal')
+        try:
+            self.chat_display.delete(self.typing_line_index, f"{self.typing_line_index} +1line")
+        except (AttributeError, tk.TclError):
+            pass
+        self.chat_display.config(state='disabled')
+
+    def check_queue(self):
+        try:
+            response, is_empathic = self.response_queue.get_nowait()
+            if not is_empathic:
+                self.remove_typing_message()
+            self.chat_history.append({"role": "assistant", "content": response})
+            self.display_message("MindEase", response, "mindease")
+        except queue.Empty:
+            pass
+        self.root.after(100, self.check_queue)
+
+    def process_message(self, user_input, sentiment):
+        try:
+            if sentiment == "negative":
+                empathic_ack = client.chat.completions.create(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": "You're a supportive mental health companion."},
+                        {"role": "user", "content": f"A user just shared this message: \"{user_input}\". Please respond with a brief, very kind and validating sentence acknowledging their distress."}
+                    ],
+                    temperature=0.8
+                ).choices[0].message.content.strip()
+                self.response_queue.put((empathic_ack, True))
+
+            response = get_supportive_response(user_input, self.chat_history, self.session_id)
+            self.response_queue.put((response, False))
+        except Exception as e:
+            self.response_queue.put((f"Something went wrong: {str(e)}", False))
 
     def send_message(self, event=None):
         user_input = self.user_input.get().strip()
         if not user_input:
             return
 
-        sentiment = detect_negative_sentiment(user_input)
-        if sentiment == "negative":
-            empathic_ack = client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You're a supportive mental health companion."},
-                    {"role": "user", "content": f"A user just shared this message: \"{user_input}\". Please respond with a brief, very kind and validating sentence acknowledging their distress."}
-                ],
-                temperature=0.8
-            ).choices[0].message.content.strip()
-            self.display_message("MindEase", empathic_ack)
-
-        self.display_message("You", user_input)
+        self.display_message("You", user_input, "user")
         self.chat_history.append({"role": "user", "content": user_input})
         self.user_input.delete(0, tk.END)
+        self.display_typing_message()
 
-        try:
-            response = get_supportive_response(user_input, self.chat_history, self.session_id)
-            self.chat_history.append({"role": "assistant", "content": response})
-            self.display_message("MindEase", response)
-        except Exception as e:
-            messagebox.showerror("Error", f"Something went wrong: {str(e)}")
+        sentiment = detect_negative_sentiment(user_input)
+        threading.Thread(target=self.process_message, args=(user_input, sentiment), daemon=True).start()
 
 if __name__ == "__main__":
     root = tk.Tk()

@@ -205,7 +205,7 @@ def get_supportive_response(user_input, chat_history, session_id):
         return reply  # Don't add follow-up in queue context, just show one output.
     else:
         affirmation = random.choice(WELCOME_MESSAGES)
-        return f"\u2728 Here's a gentle thought for you:\n{reply}\n\n{affirmation}"
+        return f"{reply}\n\n💬 {affirmation}"
 
 CRISIS_RESOURCES = (
     "\n\n\ud83d\udcde **You are not alone. Help is available:**\n"

@@ -77,7 +77,8 @@ If the chatbot detects crisis-related language (e.g., "I want to die"), it respo
 
 ## Screenshots
 
-(Add screenshots of the GUI here, e.g., the chat window with colored labels. You can upload images to GitHub and link them here, like:)
+<img width="779" height="707" alt="image" src="https://github.com/user-attachments/assets/316df39b-a324-4ec4-bed6-ad3efbb20f65" />
+
 
 ## Project Structure
 

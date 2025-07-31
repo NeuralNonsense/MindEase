@@ -77,8 +77,7 @@ If the chatbot detects crisis-related language (e.g., "I want to die"), it respo
 
 ## Screenshots
 
-<img width="858" height="689" alt="image" src="https://github.com/user-attachments/assets/64b0caa2-056e-4fb4-9d65-373c64268ec8" />
-
+<img width="858" height="868" alt="image" src="https://github.com/user-attachments/assets/8de8023f-886b-44e8-b2a0-381d914df9e6" />
 
 
 
